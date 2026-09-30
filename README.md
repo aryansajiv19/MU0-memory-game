@@ -38,7 +38,7 @@ Code starts at `&000` and data at `&450`. Because there are no immediate operand
 
 ## Engineering decisions
 
-**Repeated subtraction instead of division.** With no divide instruction, each digit is the number of times a power of ten can be subtracted before the result turns negative. For four digits this costs at most 36 loop iterations, which is negligible next to the display delay.
+**Repeated subtraction instead of division.** With no divide instruction, each digit is the number of times a power of ten can be subtracted before the result turns negative. For a four-digit number this costs at most 30 loop iterations, which is negligible next to the display delay.
 
 **Unrolling over self-modifying code.** A single decode routine would need to write to a different display and variable for each digit, which MU0 can only achieve by rewriting its own instructions at run time. That saves memory but is hard to follow and debug. Unrolling the decoder four times costs code size and keeps each digit's control flow linear and readable.
 
