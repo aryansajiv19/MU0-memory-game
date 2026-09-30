@@ -1,79 +1,106 @@
 # MU0 Memory Game
 
-A four-digit memory game written in assembly for **MU0**, the minimal 16-bit processor the University of Manchester uses to teach how computers work from the gates up.
+A four-digit memory game in MU0 assembly, using the board's keypad, 7-segment displays, LEDs and buzzer.
 
-The board flashes a random number on its 7-segment displays, then hides it. You type it back on the keypad, one digit at a time. Get it right and the green LED flashes with a bright beep. Get it wrong and you get the red LED and a lower, sadder one. Then it deals you a new number.
+![Language: MU0 assembly](https://img.shields.io/badge/language-MU0%20assembly-555)
+![Target: 16-bit MU0](https://img.shields.io/badge/target-16--bit%20MU0-555)
 
-I wrote it in my first year at Manchester. The fun part was the constraint: a game with random numbers, input, a display and sound, on a processor that can't multiply, divide or call a function.
+## Overview
 
-## Working with eight instructions
+MU0 is a minimal 16-bit accumulator architecture used at the University of Manchester to teach processor design. This program implements an interactive game on the MU0 development board: it displays a pseudo-random four-digit number, clears it after a fixed interval, reads the player's four keypresses, and signals the result with the LEDs and buzzer.
 
-MU0 has a 4-bit opcode and a 12-bit address, which leaves room for eight instructions and 4K words of memory:
+The program was written for a first-year computer engineering module. It demonstrates arithmetic, memory-mapped I/O, polling and timing on an instruction set with no multiply, divide, immediate operands, indirect addressing or subroutine linkage.
 
-| Instruction | Does |
+## Contents
+
+- [Gameplay](#gameplay)
+- [Target architecture](#target-architecture)
+- [Implementation](#implementation)
+- [Memory map](#memory-map)
+- [Building and running](#building-and-running)
+- [Known limitations](#known-limitations)
+- [Repository contents](#repository-contents)
+
+## Gameplay
+
+1. A four-digit number is shown on the displays.
+2. After a fixed delay the displays clear.
+3. The player enters the number on the keypad, most significant digit first. Each digit is echoed as it is entered.
+4. A correct entry lights the green LED with a high tone; an incorrect entry lights the red LED with a low tone.
+5. A new round begins.
+
+## Target architecture
+
+MU0 uses a 4-bit opcode and a 12-bit address field, giving eight instructions and a 4K-word address space.
+
+| Instruction | Operation |
 |---|---|
-| `LDA x` | Load the accumulator from address `x` |
-| `STA x` | Store the accumulator to `x` |
-| `ADD x`, `SUB x` | Add or subtract the value at `x` |
-| `JMP x` | Jump |
-| `JGE x` | Jump if the accumulator is zero or positive |
-| `JNE x` | Jump if the accumulator isn't zero |
-| `STP` | Stop |
+| `LDA S` | ACC ← mem[S] |
+| `STA S` | mem[S] ← ACC |
+| `ADD S` | ACC ← ACC + mem[S] |
+| `SUB S` | ACC ← ACC − mem[S] |
+| `JMP S` | PC ← S |
+| `JGE S` | If ACC ≥ 0, PC ← S |
+| `JNE S` | If ACC ≠ 0, PC ← S |
+| `STP` | Halt |
 
-There are no immediate values either, so every constant the game needs (0 to 9, 10, 100, 1000, the keypad masks, the LED bits and the buzzer tones) lives in a data table in memory.
+Because there are no immediate operands, every constant used by the program (digits 0 to 9, powers of ten, keypad masks, LED bit patterns and buzzer tones) is stored in a data table.
 
-## How it works
+## Implementation
 
 ```mermaid
 flowchart TD
-    A[Next random number] --> B[Split into four digits]
-    B --> C[Show on displays, wait, clear]
-    C --> D[Read four keypresses<br/>and echo each digit]
-    D --> E{All four match?}
-    E -- yes --> F[Green LED + high beep]
-    E -- no --> G[Red LED + low beep]
+    A[Advance PRNG] --> B[Decompose into four digits]
+    B --> C[Display, delay, clear]
+    C --> D[Poll keypad x4<br/>decode and echo each digit]
+    D --> E{All digits match?}
+    E -- yes --> F[Green LED, high tone]
+    E -- no --> G[Red LED, low tone]
     F --> A
     G --> A
 ```
 
-- **Random numbers.** A simple additive generator: each round adds a fixed step (`&CD`) to a seed (`&ABC`).
-- **Digits without division.** The thousands digit is how many times 1000 can be subtracted before the result goes negative (`SUB` then `JGE`). The same again for hundreds and tens, and what's left is the units.
-- **Timing.** The display delay and the LED flash are nested countdown loops: an inner count from `&FFFF` repeated four times.
-- **Reading the keypad.** Poll until a key is down, remember its value, then wait for release before moving on. Waiting for release is what stops one press from being read as four.
-- **Decoding keys.** Each key is one bit in the keypad word (key 0 is `&0001`, key 9 is `&0200`), so the decoder compares against the ten masks in turn, stores the digit and echoes it to that display.
-- **Checking.** The four digits are compared in order, and the first mismatch jumps straight to the lose path.
+| Stage | Technique |
+|---|---|
+| Pseudo-random numbers | Additive sequence: the seed (initially `&0ABC`) is incremented by `&00CD` each round. |
+| Digit decomposition | Repeated subtraction of 1000, 100 and 10, using `SUB` and `JGE` to detect underflow, in place of division. |
+| Timing | Nested countdown loops: an inner count from `&FFFF` repeated four times for both the display interval and the feedback flash. |
+| Keypad input | Busy-wait until the keypad word is non-zero, latch the value, then wait for release so a single press is not read more than once. |
+| Key decoding | The keypad is one-hot (key *n* sets bit *n*), so each value is compared against ten masks in sequence. |
+| Validation | Digits are compared from most to least significant; the first mismatch branches to the failure path. |
 
-### Why the key decoder appears four times
+### Design trade-off: unrolled decoding
 
-With no call and return, and no indirect addressing, a routine can't be told which display or variable to write to. The usual workaround is self-modifying code, which saves space but is much harder to follow and debug. This version unrolls the decoder once per digit instead: more code, but each digit's path reads top to bottom.
+Without subroutine linkage or indirect addressing, a routine cannot be parameterised with the destination display or variable. The common alternative is self-modifying code, which reduces program size at the cost of readability and debuggability. This implementation instead unrolls the decoder once per digit position, trading code size for four independent, linear control paths.
 
 ## Memory map
 
 | Address | Contents |
 |---|---|
-| `&000` onwards | Program |
-| `&450` onwards | Data: target and entered digits, working variables, constants |
-| `&FF2` | Keypad (read) |
-| `&FF5` to `&FF8` | 7-segment displays, units to thousands |
+| `&000` | Program entry point and code |
+| `&450` | Data: target and entered digits, working variables, constant table |
+| `&FF2` | Keypad input |
+| `&FF5` to `&FF8` | 7-segment displays (units to thousands) |
 | `&FFD` | Buzzer |
 | `&FFF` | LEDs |
 
-## Run it
+## Building and running
 
-1. Assemble `memory_game.s` with the MU0 assembler in the university's lab toolchain.
-2. Load it onto an MU0 board (or the simulator) and run from address `&000`.
+1. Assemble `memory_game.s` with the MU0 assembler in the university laboratory toolchain.
+2. Load the image onto an MU0 board or the simulator.
+3. Start execution at `&000`.
 
-`memory_game.s.kmd` is the assembled listing, with every instruction's address and machine code next to the source line, handy for stepping through on the board.
+`memory_game.s.kmd` is the assembled listing. It maps every source line to its address and machine code and ends with the symbol table, which is useful when single-stepping on hardware.
 
 ## Known limitations
 
-- **The generator isn't bounded to four digits.** The seed only ever grows, so from round 36 it passes 9,999 and the thousands "digit" goes above 9. After about 147 rounds the value passes `&7FFF` and reads as negative, so the digit extraction stops working. The fix is one more step after updating the seed: subtract 10,000 and keep the result if it's still zero or positive.
-- **Same sequence every time.** The seed is fixed, so every reset replays the same numbers. Timing the player's first keypress would be a cheap source of randomness.
-- **Pressing two keys at once** doesn't match any mask and is read as 0.
+- **Unbounded generator.** The seed is never reduced modulo 10,000. From round 36 the value exceeds 9,999 and the thousands digit exceeds 9; from round 147 it exceeds `&7FFF` and is treated as negative by `JGE`, which breaks digit decomposition. Subtracting 10,000 after each update whenever the result remains non-negative keeps the seed in range.
+- **Deterministic sequence.** The fixed initial seed replays the same numbers after every reset. Counting polling iterations before the first keypress would provide a simple entropy source.
+- **Simultaneous keypresses.** A keypad value with more than one bit set matches no mask and is decoded as 0.
 
-## Files
+## Repository contents
 
-| File | What's in it |
+| File | Description |
 |---|---|
-| `memory_game.s` | Source, commented |
-| `memory_game.s.kmd` | Assembled listing with addresses, machine code and the symbol table |
+| `memory_game.s` | Annotated assembly source |
+| `memory_game.s.kmd` | Assembled listing with addresses, machine code and symbol table |
